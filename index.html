@@ -15,7 +15,11 @@ h2 small{font:400 13px system-ui,sans-serif;color:var(--mut);margin-left:6px}
 main{max-width:1000px;margin:0 auto;padding:16px;display:grid;gap:14px}
 section{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px}
 button,.btn{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:7px 12px;border-radius:6px}
-header button,header .btn{background:transparent;color:var(--pineink);border-color:rgba(255,255,255,.45)}
+header button,header .btn{background:var(--card);color:var(--ink);border-color:var(--card);font-weight:600}
+header button:hover,header .btn:hover{border-color:var(--sun);box-shadow:0 0 0 2px var(--sun)}
+button:disabled{opacity:.45;cursor:default}
+header button:disabled:hover{border-color:var(--card);box-shadow:none}
+.lock{display:inline-flex;gap:6px;align-items:center;margin-left:10px;color:var(--mut)}
 button:hover,.btn:hover{border-color:var(--pine)}
 button:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--sun);outline-offset:2px}
 button.main{background:var(--pine);color:var(--pineink);border-color:var(--pine);font-weight:600}
@@ -53,7 +57,7 @@ input[type=text],input[type=date]{font:inherit;padding:6px;border:1px solid var(
 <div class="bar">
 <label class="btn">Import Excel<input type="file" id="f" accept=".xlsx,.xls" hidden></label>
 <button id="bx">Export Excel</button><button id="bi">Export calendar (.ics)</button>
-<button id="bu">Undo</button><button id="br">Reset all</button></div></header>
+<button id="bu">Undo</button><button id="bd">Redo</button><button id="br">Reset all</button></div></header>
 <main>
 <section><h2>People <small>one name per line, most senior first</small></h2>
 <div class="g2"><label><b>Trip leaders</b><textarea id="tl"></textarea></label>
@@ -78,7 +82,7 @@ const fmt=s=>dt(s).toLocaleDateString('en-US',{weekday:'short',month:'short',day
 const dn=t=>t.name.replace(/\s*day\s*(one|1)\b/i,'').replace(/\s*\?/g,'').replace(/\s+/g,' ').trim();
 const stem=t=>(t.name+'|'+t.loc).toLowerCase().replace(/\(.*?\)|day\s*(one|two|1|2)|overnight|\?/g,'').replace(/[^a-z|]/g,'');
 const SKIPRE=/ropes|training|open house|climbing wall|clinic|break/i;
-function blank(){return{trips:[],skipped:[],leaders:[],seconds:[],phase:'leaders',turn:{leaders:0,seconds:0},hist:[],ov:false}}
+function blank(){return{trips:[],skipped:[],leaders:[],seconds:[],phase:'leaders',turn:{leaders:0,seconds:0},hist:[],redo:[],lock:false,ov:false}}
 function toIso(v,yr){
  if(v instanceof Date&&!isNaN(v))return ymd(new Date(v.getTime()+432e5));
  const m=String(v==null?'':v).match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);if(!m)return null;
@@ -129,15 +133,25 @@ function status(S,t,p){
 let S=(()=>{try{return Object.assign(blank(),JSON.parse(localStorage[K]))}catch(e){return blank()}})(),WB=null,COLS=null;
 const $=s=>document.querySelector(s),save=()=>{try{localStorage[K]=JSON.stringify(S)}catch(e){}};
 const who=()=>{const l=S[S.phase];return l.length?l[S.turn[S.phase]%l.length]:null};
-const adv=()=>{S.turn[S.phase]++};
-const snap=()=>{S.hist.push(JSON.stringify({trips:S.trips,turn:S.turn,phase:S.phase}));if(S.hist.length>150)S.hist.shift()};
+// Moves to the next person. When the last name in the list has gone, the draft
+// switches to the other round (leaders -> seconds -> leaders ...) unless locked.
+const adv=()=>{
+ const ph=S.phase,n=S[ph].length;S.turn[ph]++;
+ if(!S.lock&&n&&S.turn[ph]%n==0){
+  const o=ph=='leaders'?'seconds':'leaders';
+  if(S[o].length){S.phase=o;return 'Everyone has gone. Now the '+o+' round.'}
+ }
+ return '';
+};
+const cur=()=>JSON.stringify({trips:S.trips,turn:S.turn,phase:S.phase});
+const snap=()=>{S.hist.push(cur());S.redo=[];if(S.hist.length>150)S.hist.shift()};
 function toast(h){const m=$('#msg');m.innerHTML=h;m.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>m.style.display='none',6000)}
 const names=v=>v.split('\n').map(s=>s.trim()).filter(Boolean);
 const ovn=t=>t.end>t.start?'<span class="ov">overnight</span>':'';
 const when=t=>fmt(t.start)+(t.end>t.start?' to '+fmt(t.end):'');
 function render(){
  const ph=S.phase,p=who(),open=S.trips.filter(t=>!t[ph].length).length,word=ph=='leaders'?'leader':'second';
- let h='<div class="tabs"><button data-a="ph" data-v="leaders" class="'+(ph=='leaders'?'on':'')+'">Leaders round</button><button data-a="ph" data-v="seconds" class="'+(ph=='seconds'?'on':'')+'">Seconds round</button></div>';
+ let h='<div class="tabs"><button data-a="ph" data-v="leaders" class="'+(ph=='leaders'?'on':'')+'">Leaders round</button><button data-a="ph" data-v="seconds" class="'+(ph=='seconds'?'on':'')+'">Seconds round</button><label class="lock"><input type="checkbox" id="lk"'+(S.lock?' checked':'')+'> Stay in this round (do not switch automatically)</label></div>';
  if(!S.trips.length)h+='<p>No trips yet. Import your Excel file or add a trip by hand.</p>';
  else if(!p)h+='<p>Add names to the '+(ph=='leaders'?'trip leaders':'seconds')+' list above to start this round.</p>';
  else{
@@ -154,6 +168,7 @@ function render(){
  const chips=(t,r)=>t[r].map((n,k)=>'<span class="chip">'+esc(n)+'<i data-a="rm" data-id="'+t.id+'" data-r="'+r+'" data-k="'+k+'" title="Remove" role="button">×</i></span>').join('')+
   '<select data-a="add" data-id="'+t.id+'" data-r="'+r+'" aria-label="Add '+r+'"><option value="">+ add</option>'+S[r].map(n=>'<option>'+esc(n)+'</option>').join('')+'</select>';
  $('#tbl').innerHTML='<h2>All trips <small>'+S.trips.length+' in the draft. Change any assignment by hand here.</small></h2>'+(S.trips.length?'<div style="overflow-x:auto"><table><tr><th>Date</th><th>Trip</th><th>Leader(s)</th><th>Second(s)</th><th></th></tr>'+S.trips.map(t=>'<tr><td>'+when(t)+'</td><td>'+esc(dn(t))+ovn(t)+'<br><small class="mut">'+esc(t.loc)+'</small></td><td>'+chips(t,'leaders')+'</td><td>'+chips(t,'seconds')+'</td><td><button class="x" data-a="del" data-id="'+t.id+'" title="Remove trip from draft" aria-label="Remove trip">×</button></td></tr>').join('')+'</table></div>':'<p class="mut">Nothing here yet.</p>');
+ $('#bu').disabled=!S.hist.length;$('#bd').disabled=!S.redo.length;
  $('#skp').innerHTML=S.skipped.length?'<h2>Skipped from the import <small>'+S.skipped.length+' rows. Add any back if they should be drafted.</small></h2>'+S.skipped.map((s,k)=>'<div class="sk"><span><b>'+esc(s.name)+'</b> <small class="mut">row '+s.row+(s.date?' · '+fmt(s.date):'')+'</small><br><em>'+esc(s.reason)+'</em></span><button data-a="sk" data-k="'+k+'">Add to draft</button></div>').join(''):'';
  save();
 }
@@ -161,12 +176,12 @@ document.addEventListener('click',e=>{
  const b=e.target.closest('[data-a]');if(!b||b.tagName=='SELECT')return;
  const a=b.dataset.a,t=S.trips.find(x=>x.id==b.dataset.id),p=who();
  if(a=='ph')S.phase=b.dataset.v;
- else if(a=='pick'&&t&&p){snap();t[S.phase].push(p);adv()}
- else if(a=='skip'&&p){snap();adv()}
+ else if(a=='pick'&&t&&p){snap();t[S.phase].push(p);const m=adv();if(m)toast(m)}
+ else if(a=='skip'&&p){snap();const m=adv();if(m)toast(m)}
  else if(a=='rand'&&p){
   const av=S.trips.filter(x=>!status(S,x,p));
   if(!av.length)return toast('Nothing is open for '+esc(p)+'. Use Skip.');
-  const x=av[Math.random()*av.length|0];snap();x[S.phase].push(p);adv();toast(esc(p)+' got '+esc(dn(x)));
+  const x=av[Math.random()*av.length|0];snap();x[S.phase].push(p);const m=adv();toast(esc(p)+' got '+esc(dn(x))+(m?'. '+m:''));
  }
  else if(a=='rm'&&t){snap();t[b.dataset.r].splice(+b.dataset.k,1)}
  else if(a=='del'&&t){snap();S.trips=S.trips.filter(x=>x!==t)}
@@ -182,12 +197,17 @@ document.addEventListener('change',e=>{
  const s=e.target;
  if(s.dataset.a=='add'&&s.value){const t=S.trips.find(x=>x.id==s.dataset.id);snap();t[s.dataset.r].push(s.value);render()}
  else if(s.id=='ov'){S.ov=s.checked;render()}
+ else if(s.id=='lk'){S.lock=s.checked;render();toast(S.lock?'Rounds will not switch automatically.':'Rounds will switch after the last name goes.')}
 });
 $('#tl').oninput=e=>{S.leaders=names(e.target.value);render()};
 $('#ts').oninput=e=>{S.seconds=names(e.target.value);render()};
 $('#bu').onclick=()=>{
  if(!S.hist.length)return toast('Nothing to undo.');
- Object.assign(S,JSON.parse(S.hist.pop()));render();toast('Undid the last action.');
+ S.redo.push(cur());Object.assign(S,JSON.parse(S.hist.pop()));render();toast('Undid the last action.');
+};
+$('#bd').onclick=()=>{
+ if(!S.redo.length)return toast('Nothing to redo.');
+ S.hist.push(cur());Object.assign(S,JSON.parse(S.redo.pop()));render();toast('Redid the action.');
 };
 $('#br').onclick=()=>{
  if(!confirm('Clear the people, trips, and all picks?'))return;
@@ -205,7 +225,7 @@ $('#f').onchange=async e=>{
  try{
   WB=XLSX.read(await f.arrayBuffer(),{type:'array',cellDates:true});
   const R=XLSX.utils.sheet_to_json(WB.Sheets[WB.SheetNames[0]],{header:1,raw:true,defval:null});
-  const r=parseRows(R);COLS=r.cols;S.trips=r.trips;S.skipped=r.skipped;S.hist=[];S.turn={leaders:0,seconds:0};
+  const r=parseRows(R);COLS=r.cols;S.trips=r.trips;S.skipped=r.skipped;S.hist=[];S.redo=[];S.turn={leaders:0,seconds:0};
   render();toast('Imported '+r.trips.length+' trips ('+r.trips.filter(t=>t.end>t.start).length+' overnight). '+r.skipped.length+' rows were skipped, see the list below.');
  }catch(err){toast('Could not read that file. Check that it is an .xlsx with the same columns as before.')}
  e.target.value='';
