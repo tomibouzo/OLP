@@ -243,7 +243,13 @@ $('#bx').onclick=()=>{
   else{const r=next++;put(r,0,when(t));put(r,1,t.name);put(r,2,t.loc);put(r,c.L,L);put(r,c.a,A)}
  });
  rg.e.r=Math.max(rg.e.r,next-1);ws['!ref']=XLSX.utils.encode_range(rg);
- XLSX.writeFile(wb,'trip_assignments.xlsx');
+ // Excel shows ######## when a column is too narrow for a date, so set a readable
+ // date format and make sure every column is wide enough for its content.
+ for(let r=1;r<=rg.e.r;r++){const cell=ws[XLSX.utils.encode_cell({r,c:0})];if(cell&&(cell.t=='d'||(cell.t=='n'&&cell.z)))cell.z='ddd, mmm d, yyyy'}
+ const W=[22,40,30,18,22,24,24,11,12,14,40],cols=ws['!cols']||[];
+ for(let i=0;i<=rg.e.c;i++){const w=W[i]||14,cur=cols[i]&&(cols[i].wch||(cols[i].wpx&&cols[i].wpx/7));cols[i]=Object.assign({},cols[i],{wch:Math.max(w,cur||0)});delete cols[i].wpx;delete cols[i].width}
+ ws['!cols']=cols;
+ XLSX.writeFile(wb,'trip_assignments.xlsx',{cellDates:true});
 };
 $('#bi').onclick=()=>{
  const trips=S.trips.filter(t=>t.leaders.length||t.seconds.length);
